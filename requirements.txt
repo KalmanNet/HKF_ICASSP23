@@ -1,0 +1,8 @@
+torch~=1.11.0+cu113
+biosppy~=1.0.0
+matplotlib~=3.5.2
+tqdm~=4.64.0
+numpy~=1.23.0
+colorednoise~=2.1.0
+scipy~=1.8.1
+wfdb~=4.0.0
