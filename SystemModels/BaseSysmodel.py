@@ -116,7 +116,7 @@ class BaseSystemModel:
         """
         # If analytical Jacobian is available
         if self.HJacSet:
-            return self.hJacobian(x, t)
+            return self.h_jacobian(x, t)
         # Else compute numerically
         else:
             return torch.autograd.functional.jacobian(self.h, (x, torch.tensor(t, dtype=torch.float32)))[0]
@@ -129,7 +129,7 @@ class BaseSystemModel:
         :return: None
         """
         # Flag to not compute the Jacobian numerically
-        self.FJacSet = True
+        self.HJacSet = True
 
         # Set the Jacobian function
         self.h_jacobian = dh
