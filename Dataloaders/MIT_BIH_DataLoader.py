@@ -8,11 +8,10 @@ import wfdb
 
 class MIT_BIH_DataLoader(BaseECGLoader):
 
-    def __init__(self, datapoints: int, samples: list, snr_db: int, noise_color: int = 0):
+    def __init__(self, datapoints: int, sample: int, snr_db: int, noise_color: int = 0):
+        super(MIT_BIH_DataLoader, self).__init__(datapoints, sample, snr_db, noise_color)
 
-        super(MIT_BIH_DataLoader, self).__init__(datapoints, samples, snr_db, noise_color)
-
-    def load_data(self, samples: list) -> (torch.Tensor, int):
+    def load_data(self, sample: int) -> (torch.Tensor, int):
         """
         Download dataset from PhysioNet if it is not downloaded yet, and return the all sample patient recordings
         :param samples: List of all desired patient samples
@@ -34,13 +33,13 @@ class MIT_BIH_DataLoader(BaseECGLoader):
 
         # Get filenames from folder
         raw_data_files = glob.glob(path_to_dataset + '\\' + '*.hea')
-        raw_data_files = [raw_data_files[index] for  index in samples]
+        raw_data_files = [raw_data_files[index] for index in range(sample)]
 
         # Get filenames from folder
         raw_annotation_files = glob.glob(path_to_dataset + '\\' + '*.atr')
-        raw_annotation_files = [raw_annotation_files[index] for index in samples]
+        raw_annotation_files = [raw_annotation_files[index] for index in [sample]]
 
-        annotation_files = [wfdb.rdann(annotation_file[:-4], 'atr' ) for annotation_file in raw_annotation_files]
+        annotation_files = [wfdb.rdann(annotation_file[:-4], 'atr') for annotation_file in raw_annotation_files]
 
         # Read the data stream
         dataset = [wfdb.rdrecord(raw_data_file[:-4]).p_signal for raw_data_file in raw_data_files]
@@ -51,8 +50,6 @@ class MIT_BIH_DataLoader(BaseECGLoader):
 
         return dataset, samples_per_second
 
-    def find_peaks(self, observations: torch.Tensor) -> list:
-        return self.mit_labels
-
-    def __len__(self):
-        return 42
+    # Uncomment for debugging
+    # def __len__(self):
+    #     return 60

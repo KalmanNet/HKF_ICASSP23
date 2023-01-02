@@ -8,11 +8,11 @@ import numpy as np
 
 class ProprietaryDataLoader(BaseECGLoader):
 
-    def __init__(self, datapoints: int, samples: list, snr_db: int, noise_color: int = 0):
-        super(ProprietaryDataLoader, self).__init__(datapoints, samples, snr_db, noise_color)
+    def __init__(self, datapoints: int, sample: int, snr_db: int, noise_color: int = 0):
+        super(ProprietaryDataLoader, self).__init__(datapoints, sample, snr_db, noise_color)
 
 
-    def load_data(self, samples: list) -> (torch.Tensor, int):
+    def load_data(self, sample: int) -> (torch.Tensor, int):
 
         sampling_rate = 500
 
@@ -33,10 +33,10 @@ class ProprietaryDataLoader(BaseECGLoader):
 
         # Get filenames from folder
         mat_files = glob.glob(exact_path + '*.mat')
-        mat_files = [mat_files[sample] for sample in samples]
+        mat_files = [mat_files[sample] for sample in [sample]]
 
         # Read the data stream
-        dataset = [loadmat(mat_file)['ECG'] for mat_file in mat_files ]
+        dataset = [loadmat(mat_file)['ECG'] for mat_file in mat_files]
 
         # Convert to torch tensor
         dataset = torch.tensor(np.array(dataset)).float()
