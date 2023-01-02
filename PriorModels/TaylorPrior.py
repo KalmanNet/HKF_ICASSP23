@@ -16,12 +16,12 @@ class TaylorPrior(BasePrior):
         super(TaylorPrior, self).__init__()
 
         # Get Taylor model parameters
-        self.taylor_order = kwargs['taylor_order'] if 'taylor_order' in kwargs.keys() else 5
-        self.delta_t = kwargs['delta_t'] if 'delta_t' in kwargs.keys() else 1
+        self.taylor_order = kwargs.get('taylor_order', 5)
+        self.delta_t = kwargs.get('delta_t', 1)
         self.channels = kwargs['channels']
-        self.window_type = kwargs['window_type'] if 'window_type' in kwargs.keys() else 'rectangular'
-        self.window_size = kwargs['window_size'] if 'window_size' in kwargs.keys() else 5
-        self.window_parameter = kwargs['window_parameter'] if 'window_parameter' in kwargs.keys() else 1
+        self.window_type = kwargs.get('window_type', 'rectangular')
+        self.window_size = kwargs.get('window_size', 5)
+        self.window_parameter = kwargs.get('window_parameter', 1)
 
         assert self.taylor_order >= 1, 'Taylor order must be at least 1'
         assert self.delta_t > 0, 'Time delta needs to be positive'
@@ -42,20 +42,21 @@ class TaylorPrior(BasePrior):
         :return: Weights of the window
         """
 
+        half_window = int(window_size / 2)
         if window_type == 'rectangular':
             weights = torch.from_numpy(np.array([window_parameter for _ in range(window_size)]))
 
         elif window_type == 'exponential':
-            weights = np.array([window_parameter ** (np.abs(w - int(window_size / 2))) for w in range(window_size)])
+            weights = np.array([window_parameter ** (np.abs(w - half_window)) for w in range(window_size)])
             weights = torch.from_numpy(weights)
 
         elif window_type == 'gaussian':
-            weights =  np.array([window_parameter * np.exp(- (w - int(window_size / 2)) ** 2 / (2 * window_parameter)) for w in range(window_size)])
-            weights = torch.from_numpy(weights)
+            weights = [window_parameter * np.exp(-(w-half_window)**2/(2*window_parameter)) for w in range(window_size)]
+            weights = torch.tensor(weights)
 
         elif window_type == 'linear':
             slope = 1 / window_size
-            weights = np.array([-slope*np.abs(w-int(window_size / 2)) + window_parameter for w in range(window_size)])
+            weights = np.array([-slope*np.abs(w - half_window) + window_parameter for w in range(window_size)])
             weights = torch.from_numpy(weights)
 
         else:
@@ -86,18 +87,18 @@ class TaylorPrior(BasePrior):
         # Pad data for the averaging
         padded_data = pad(data, (0, 0, -lower_bound_index, upper_bound_index), 'replicate')
 
+        # Covariance matrix of the basis function
+        covariance = torch.bmm(basis_functions.mT, basis_functions)
+
         # Solve T-LS problems
         for t in range(self.time_steps):
 
             # Get current observations and next observations
-            current_state = padded_data[:,t-lower_bound_index-half_window_size:t+half_window_size-lower_bound_index+1]
-            observations = padded_data[:,t-lower_bound_index-half_window_size+1:t+half_window_size-lower_bound_index+2]
+            current_state = padded_data[:, t-lower_bound_index-half_window_size:t+half_window_size-lower_bound_index+1]
+            observations = padded_data[:, t-lower_bound_index-half_window_size+1:t+half_window_size-lower_bound_index+2]
 
             # Target for the LS-regression
             target_tensor = (observations - current_state).reshape(self.window_size, batch_size, -1)
-
-            # Covariance matrix of the basis function
-            covariance = torch.bmm(basis_functions.mT, basis_functions)
 
             # Get the cross correlation for each time step
             cross_correlation = torch.bmm(basis_functions.mT, target_tensor)
