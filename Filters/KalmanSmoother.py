@@ -2,7 +2,7 @@ import torch
 from tqdm import trange
 from utils.MovingAverage import moving_average
 from SystemModels.BaseSysmodel import BaseSystemModel
-
+from numpy import pi
 
 class KalmanFilter:
 
@@ -33,6 +33,7 @@ class KalmanFilter:
         self.H_em = False
 
         self.init_sequence()
+
 
     def f_batch(self, states: torch.Tensor, t: int) -> torch.Tensor:
         """
@@ -110,6 +111,14 @@ class KalmanFilter:
         self.Q_arr = None
         self.R_arr = None
 
+    def update_sysmodel(self, sys_model: BaseSystemModel) -> None:
+
+        self.m = sys_model.m
+        self.n = sys_model.n
+
+        self.f = sys_model.f
+        self.h = sys_model.h
+
     def init_sequence(self, initial_mean: torch.Tensor = None, initial_covariance: torch.Tensor = None) -> None:
         """
         Initialize both mean and covariance for the prior, default x_{0|0} ~ N(0,I)
@@ -171,7 +180,7 @@ class KalmanFilter:
         if self.H_em:
             self.H = self.H_arr[t]
         else:
-            self.H = torch.stack([self.ssModel.get_f_jacobian(state, t) for state in self.Filtered_State_Mean])
+            self.H = torch.stack([self.ssModel.get_h_jacobian(state, t) for state in self.Filtered_State_Mean])
 
     def predict(self, t: int):
         """
@@ -231,6 +240,8 @@ class KalmanFilter:
         self.Filtered_State_Covariance = torch.bmm(self.H, self.Predicted_State_Covariance)
         self.Filtered_State_Covariance = torch.bmm(self.KG, self.Filtered_State_Covariance)
         self.Filtered_State_Covariance = self.Predicted_State_Covariance - self.Filtered_State_Covariance
+
+        self.Filtered_State_Covariance  = 0.5 * self.Filtered_State_Covariance + 0.5 * self.Filtered_State_Covariance.mT
 
         self.Filtered_Residual = self.Observation - torch.bmm(self.H, self.Filtered_State_Mean)
 
@@ -302,6 +313,17 @@ class KalmanFilter:
             self.F_arr[:, t] = self.F
             self.H_arr[:, t] = self.H
 
+    def log_likelihood(self) -> torch.Tensor:
+
+        res = torch.einsum('Tij,Tjk,Tkl->Til',
+                            (self.Predicted_Residuals[0].mT,
+                             torch.linalg.pinv(self.Predicted_Observation_Covariances[0]), self.Predicted_Residuals[0]))
+        res += torch.log(torch.linalg.det(self.Predicted_Observation_Covariances[0])).reshape(-1,1,1)
+        res += self.n * torch.log(2*torch.tensor(pi))
+        return -0.5*res
+
+
+
     def init_online(self, T: int) -> None:
         """
         Initiliaze all data buffers for online filtering
@@ -338,7 +360,7 @@ class KalmanFilter:
         # Initialize time
         self.t = 0
 
-    def update_online(self, observations: torch.Tensor) -> torch.Tensor:
+    def update_online(self, observations: torch.Tensor) -> (torch.Tensor, torch.Tensor):
         """
         Single step filtering
         :param observations: Observation at current time index
@@ -369,7 +391,7 @@ class KalmanFilter:
 
         self.t += 1
 
-        return self.Filtered_State_Mean
+        return self.Filtered_State_Mean, self.Filtered_State_Covariance
 
     def ml_update_q(self, observation: torch.Tensor) -> None:
         """
@@ -390,6 +412,7 @@ class KalmanFilter:
         P_diag = torch.diagonal(self.Filtered_State_Covariance, dim1=-1, dim2=-2)
 
         Q = torch.bmm(rho_mean.mT, rho_mean) / self.m - R_diag.mean() - P_diag.mean()
+        # Q = torch.diagonal(torch.bmm(rho_mean, rho_mean.mT), dim1=-1, dim2=-2) / self.m - R_diag - P_diag
 
         self.update_Q(torch.clip(Q, 0) * torch.eye(self.m))
 
@@ -426,7 +449,7 @@ class KalmanSmoother(KalmanFilter):
     def smooth(self, observations: torch.Tensor, T: int) -> (torch.Tensor, torch.Tensor):
         """
         Perform kalman smoothing on the given observations
-        :param observations: Tensor of observations
+        :param observations: Tensor of observations dimensions (batch_size, T , channels, 1)
         :param T: Time horizon
         :return: Smoothed state means
         """
@@ -487,8 +510,8 @@ class KalmanSmoother(KalmanFilter):
     def em(self,
            observations: torch.Tensor,
            T: int,
-           q_2_init: float,
-           r_2_init: float,
+           q_2_init: float or None,
+           r_2_init: float or None,
            num_its: int = 20,
            states: torch.Tensor = None,
            convergence_threshold=1e-6,
@@ -509,11 +532,13 @@ class KalmanSmoother(KalmanFilter):
         """
 
         # Set initial covariance estimates
-        self.update_Q(q_2_init * torch.eye(self.m))
-        self.update_R(r_2_init * torch.eye(self.n))
+        if q_2_init is not None:
+            self.update_Q(q_2_init * torch.eye(self.m))
+        if r_2_init is not None:
+            self.update_R(r_2_init * torch.eye(self.n))
 
         # Set up iteration counter
-        iteration_counter = trange(num_its, desc='EM optimization steps')
+        # iteration_counter = trange(num_its, desc='EM optimization steps')
 
         # If labels are available, calculate the loss
         losses = []
@@ -522,7 +547,7 @@ class KalmanSmoother(KalmanFilter):
             states = states.squeeze()
 
         # Start iteration
-        for n in iteration_counter:
+        for n in range(num_its):
 
             # E-Step
             self.smooth(observations, T)
@@ -571,11 +596,11 @@ class KalmanSmoother(KalmanFilter):
             if states != None:
                 loss = loss_fn(self.h_batch(self.Smoothed_State_Means.squeeze(), 0).squeeze(), states.squeeze())
                 losses.append(10 * torch.log10(loss))
-                iteration_counter.set_description('Iteration loss: {} [dB]'.format(10 * torch.log10(loss).item()))
+                # iteration_counter.set_description('EM Iteration loss: {} [dB]'.format(10 * torch.log10(loss).item()))
 
             # Check for convergence
             if all([self.__getattribute__(f'{i}_diff') < convergence_threshold for i in self.em_vars]):
-                print('Converged')
+                # print('Converged')
                 break
 
         if states != None:
@@ -625,9 +650,9 @@ class KalmanSmoother(KalmanFilter):
 
         # Don't average the estimate
         if smoothing_window == 0:
-            HU_xy = torch.einsum('Bmp,BTpn->BTmn', (self.H_arr, self.U_yx.mT))
+            HU_xy = torch.einsum('BTmp,BTpn->BTmn', (self.H_arr, self.U_yx.mT))
 
-            HUH = torch.einsum('Bmp,BTpk,Bkn->BTmn', (self.H_arr, self.U_xx, self.H_arr.mT))
+            HUH = torch.einsum('BTmp,BTpk,BTkn->BTmn', (self.H_arr, self.U_xx, self.H_arr.mT))
             R_arr = self.U_yy - HU_xy - HU_xy.mT + HUH
 
         # Average over entire time horizon
@@ -715,6 +740,7 @@ class KalmanSmoother(KalmanFilter):
 
             FVF = torch.einsum('Bmp,Bpk,Bkn->Bmn', (F, V_xx, F.mT))
             Q_arr = V_x1x1 - FV_xx1 - FV_xx1.mT + FVF
+            Q_arr = torch.clip(Q_arr, 0)
             Q_arr = Q_arr.repeat(1, self.ssModel.T, 1, 1)
 
         # Average over given window size
